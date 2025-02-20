@@ -13,27 +13,25 @@ jobs:
     - name: Checkout code from current repository
       uses: actions/checkout@v3
       with:
-        # This automatically checks out the current repository (where the workflow is running)
-        path: current-repo  # Optional, specify a path if you want to check out into a subdirectory (default is the root)
+        path: current-repo
 
     - name: List files in the current repository
       run: |
         echo "Listing files in the current repository"
-        ls -alh current-repo # This lists all files in the current directory, including hidden files
+        ls -alh current-repo
 
     - name: Read version from dify-version.txt in current repository
       id: read_version
       run: |
-        # Read version from dify-version.txt in the current repository
-        version=$(cat current-repo/dify-version.txt)  # Adjust path if file is in a subdirectory
+        version=$(cat current-repo/dify-version.txt)
         echo "Dify version: $version"
-        echo "::set-output name=version::$version"
+        echo "version=$version" >> $GITHUB_OUTPUT
 
     - name: Checkout code from Dify repo
       uses: actions/checkout@v3
       with:
-        repository: langgenius/dify  # Pull langgenius/dify repository
-        path: dify-repo  # Check out the Dify repo into the dify-repo directory
+        repository: langgenius/dify
+        path: dify-repo
 
     - name: Checkout specific tag from Dify repo
       run: |
@@ -41,25 +39,28 @@ jobs:
         echo "Checking out version tag: $version"
         cd dify-repo
         git fetch --tags
-        git checkout "tags/$version"
+        git checkout "$version" || git checkout "tags/$version"
 
     - name: Install yq
       run: |
+        set -e
         sudo wget https://github.com/mikefarah/yq/releases/download/v4.27.3/yq_linux_amd64 -O /usr/bin/yq
         sudo chmod +x /usr/bin/yq
+        yq --version
 
     - name: Parse docker-compose.yaml for images
       id: parse_docker_compose
       run: |
         images=$(yq e '.services[].image // ""' dify-repo/docker/docker-compose.yaml | grep -v '^$' | tr '\n' ' ')
         echo "Images: $images"
-        echo "::set-output name=images::$images"
+        echo "images=$images" >> $GITHUB_OUTPUT
 
     - name: Log in to Alibaba Cloud ACR
       run: echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} --username ${{ secrets.ACR_USERNAME }} --password-stdin
 
     - name: Pull and push images to Alibaba Cloud ACR
       run: |
+        set -e
         images="${{ steps.parse_docker_compose.outputs.images }}"
         for image in $images; do
           echo "Processing image: $image"
@@ -75,10 +76,13 @@ jobs:
           echo "Tagging image: $acr_image"
           docker tag $image $acr_image
 
-          docker rmi $image
+          # 删除原始镜像
+          docker rmi $image || true
           
           # Push the image to ACR
           echo "Pushing image to ACR: $acr_image"
           docker push $acr_image
-          docker rmi $acr_image
+
+          # 删除 ACR 镜像，释放空间
+          docker rmi $acr_image || true
         done
